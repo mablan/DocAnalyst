@@ -1,0 +1,370 @@
+---
+title: "Document Text Analysis"
+author: "Magdiel Ablan"
+date: "27 de abril de 2019"
+output:
+  html_document: default
+  pdf_document: default
+params:
+  keyword1: God 
+  keyword2: Holy
+  keyword3: Nation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+ 
+```{r echo=FALSE}
+# if not knitted, outputFormat will be NULL
+outputFormat = knitr::opts_knit$get("rmarkdown.pandoc.to")
+
+colFmt = function(x,color){
+  # This function is modified from: 
+  # https://stackoverflow.com/questions/29067541/how-to-change-the-font-color
+  if(is.null(outputFormat)) x 
+  else if(outputFormat == 'latex')
+    paste("\\textcolor{",color,"}{",x,"}",sep="")
+  else if(outputFormat == 'html')
+    paste("<font color='",color,"'>",x,"</font>",sep="")
+  
+}
+
+
+```
+# Introduction 
+
+The following document describes an algorithm that given a text (in pdf format)
+and a list of keywords perform the following:
+
+* Search for keywords
+* Count the their frequency
+* Highlighting the paragraphs where the keyword was found
+
+The process will be explained in detail with the first keyword. For each keyword
+a table is produced with the page number (original document), line number (text 
+data frame), and fragment text where it is produced. At the end a table with
+all the keywords is presented. 
+
+## Data preparation
+
+First, we need to install all the required libraries:
+
+```{r echo=TRUE, message=FALSE}
+# Set of packages for data analysis:
+library(tidyverse) 
+# tidytext library from the book of Silge and Robinson:
+library(tidytext)
+# text minning package
+library(tm)
+# to print nice tables
+library(xtable)
+
+```
+
+Then, read the document and extract its content. 
+It is importat to switch comments here for the variable `src_encoding`: **If it 
+is running in Linux, it should be "UTF-8". If running in Mac or Windows, it 
+should be "ISO8859-1". **
+
+```{r}
+read <- readPDF(engine="xpdf")
+document <- Corpus(URISource("./data/Saudi_Vision2030_EN.pdf"), 
+                   readerControl = list(reader = read))
+doco <- content(document[[1]])
+#src_enconding <-"ISO8859-1"
+src_enconding <-"UTF-8"
+end_enconding <- "UTF-8"
+doco <- iconv(doco,src_enconding ,end_enconding, sub="")
+head(doco)
+```
+
+`doco` is a vector of char strings. Each element of the vector is a line of text.
+Page breaks are given by the symbol: "\\f".  It will be useful later to know
+where the page breaks are located:
+
+```{r}
+page_breaks <- grep("\\f", doco)
+doco[page_breaks[1]]
+```
+
+The first three pages do not have any text, since the consecutives "\\f". 
+
+Now, we convert all the text to lower case and eliminate page breaks and empty
+strings. The resulting vector `doc` is where all the analysis are run:
+
+```{r}
+# doc0 everything lower case
+doc0 =tolower(doco)
+
+# doc1 replaces page breaks
+doc1 <-str_replace_all(doc0,"\\f"," ")
+
+# doc2 eliminates isolated characters of length 1
+doc2 <- keep(.x = doc1, .p = function(x){str_length(x) > 2})
+
+# everything is saved in doc
+doc <-doc2
+head(doc)
+
+```
+
+
+## First keyword: `r params$keyword1 `
+
+### Locate the keyword in the text
+
+Convert the keyword to lower case:
+```{r}
+keyword1 <- tolower(params$keyword1)
+keyword1
+```
+
+First we tokenize the text by word, excluding uninteresting words:
+```{r}
+text_df <- tibble(text = doc)
+text_tidy <-text_df %>%
+      unnest_tokens(word, text) %>%
+      anti_join(stop_words)
+head(text_tidy)
+```
+
+Then, count the frequency of each word in the text:
+
+```{r}
+word_frequency <-text_tidy %>%
+  count(word, sort = TRUE)
+#head(word_frequency)
+
+```
+
+
+### Locate the keyword in the text
+
+To avoid matches where the keyword is embedded in another word, we need the
+following regular expression:
+
+```{r}
+pat1 <- paste0("\\b",keyword1,"\\b")
+
+```
+
+
+Which lines contains the keyword?
+
+```{r}
+
+sentences1 <- text_df[str_detect(text_df$text,pat1),]
+head(sentences1)
+```
+
+How many times does the keyword appear?
+
+```{r}
+times1 <- nrow(text_df[str_detect(text_df$text,pat1),])
+times1
+```
+
+Where are they located?
+
+```{r}
+lines1 = which(str_detect(text_df$text,pat1))
+lines1
+```
+
+What page numbers in the original document?
+
+```{r}
+pages1 = findInterval(which(str_detect(doc0,pat1)),page_breaks) + 3
+pages1
+```
+
+Highlight the keyword with a color
+
+This function color the keyword in the sentence fragment where it appears. It
+uses the function `colFm` specified at the beginning.
+
+```{r}
+color_key <-function(sentence,key,debug=FALSE) {
+  pat = paste0("\\b",key,"\\b")
+  nk <- str_count(sentence,pat)
+  if (debug) cat("nk= ",nk,"\n")
+  if (nk > 0) {
+    #if (debug) print(sentence, "\n")
+    index <-str_locate(sentence,pat)
+    if (debug) cat(index, "\n")
+    p1 <- str_sub(sentence,1,index[1]-1)
+    p2 <- str_sub(sentence,index)
+    p3 <- str_sub(sentence,index[2]+1,nchar(sentence))
+    if (debug) cat("p1= ",p1," p2= ",p2, " p3= ",p3,"\n")
+    pall <-paste0(p1,colFmt(p2,'blue'),p3,collapse=" ")
+  } else sentence
+}
+
+```
+
+```{r}
+get_sentence <-function(charvec,location,key,span=5,debug=FALSE) {
+  # charvec: vector of char strings
+  # location: index to keyword location in charvec
+  # ley: keyword
+  # span: number of lines to go above and below the current line to get a
+  #       sentence
+  
+  # pattern to look for keyword
+  pat = paste0("\\b",key,"\\b")
+  # Go location +- span lines trying to find a whole sentence
+  begin=location-span
+  end = location+span
+  if (debug) cat("begin,end: ", begin,end,"\n")
+  
+  # paste all lines in just one string:
+  together = paste(charvec[begin:end,]$text,collapse=" ")
+  if (debug) cat("together=", together,"\n")
+  
+  # make sentences out of this string looking for "."
+  sentences =strsplit(together, "\\.")
+  #sentences =strsplit(together, "\\.?!\\.")
+  if (debug) { cat("sentences: \n")
+    print(sentences)}
+
+  # index is the index of the sentence given by location  
+  index <-str_which(sentences[[1]],charvec[location,]$text)
+  
+  # if index has length 0, it means that the fragment is between two sentences
+  # and we go back to just finding the keyword.
+  # However, the keyword may appear more than once in the selected sentences.
+  # Let's pick the first
+  
+  if (length(index)==0) index <- min(str_which(sentences[[1]],pat))
+  
+  # Color the keyword in the sentence
+  sent.aprox <-color_key(sentences[[1]][index],key,debug=FALSE)
+  
+  # i is the index of the sentence where the key is located
+  #nk <- sum(str_detect(sentences[[1]],pat))
+  #pall<-numeric(nk)
+  #for (j in 1:nk) {
+  #  sev <- str_which(sentences[[1]],pat)
+  #  pall[j]<-color_key(sentences[[1]][sev[j]],pat)
+  #  if (debug) {cat("i= \n")
+  #    print(i) }
+  #}
+  sent.aprox
+}
+
+```
+
+
+
+
+### Results
+
+Produces a table with the page and sentence with the ocurrences of the keyword:
+
+```{r results='asis'}
+context1 <-data.frame(p=numeric(times1),location=lines1,line=numeric(times1))
+
+ for (i in 1:times1) {
+   context1$p[i] <- pages1[i]
+   context1$line[i] <- color_key(sentences1[i,],keyword1)
+   #context1$line[i] <- get_sentence(text_df,lines1[i],keyword1)
+ }
+
+ if (is.null(outputFormat)) context1 else
+   print(xtable(context1,auto=TRUE),comment=FALSE,
+         sanitize.text.function = identity,type=outputFormat)
+
+
+```
+
+## Second keyword: `r params$keyword2 `
+
+Repeat the previous steps with the second keyword:
+
+```{r eval=TRUE}
+keyword2 <- tolower(params$keyword2)
+pat2 <- paste0("\\b",keyword2,"\\b")
+sentences2 <- text_df[str_detect(text_df$text,pat2),]
+times2 <- nrow(text_df[str_detect(text_df$text,pat2),])
+lines2 = which(str_detect(text_df$text,pat2))
+pages2 = findInterval(which(str_detect(doc0,pat2)),page_breaks) + 3
+
+context2 <-data.frame(p=numeric(times2),location=lines2,line=numeric(times2))
+
+ for (i in 1:times2) {
+   #print(i)
+   context2$p[i] <- pages2[i]
+   context2$line[i] <- color_key(sentences2[i,],keyword2)
+   #context2$line[i] <- get_sentence(text_df,lines2[i],keyword2)
+ }
+
+
+```
+
+Print the results:
+
+```{r results='asis' }
+ if (is.null(outputFormat)) context2 else
+   print(xtable(context2,auto=TRUE),comment=FALSE,
+         sanitize.text.function = identity,type=outputFormat)
+
+```
+
+
+## Third keyword: `r params$keyword3 `
+
+Repeat the previous steps with the second keyword:
+
+```{r}
+keyword3 <- tolower(params$keyword3)
+pat3 <- paste0("\\b",keyword3,"\\b")
+sentences3 <- text_df[str_detect(text_df$text,pat3),]
+times3 <- nrow(text_df[str_detect(text_df$text,pat3),])
+lines3 = which(str_detect(text_df$text,pat3))
+pages3 = findInterval(which(str_detect(doc0,pat3)),page_breaks) + 3
+
+context3 <-data.frame(p=numeric(times3),location=lines3,line=numeric(times3))
+
+ for (i in 1:times3) {
+   context3$p[i] <- pages3[i]
+   context3$line[i] <- color_key(sentences3[i,],keyword3)
+   #context3$line[i] <- get_sentence(text_df,lines3[i],keyword3)
+ }
+
+
+```
+
+Print the results:
+
+```{r results='asis'}
+ if (is.null(outputFormat)) context3 else
+   print(xtable(context3,auto=TRUE),comment=FALSE,
+         sanitize.text.function = identity,type=outputFormat)
+
+```
+
+
+## All keywords together
+
+Group the results of the different keywords and sort it for order of apperance 
+in the text
+
+```{r}
+context <- bind_rows(context1,context2,context3)
+context <-arrange(context,location)
+
+```
+
+
+```{r results='asis'}
+ if (is.null(outputFormat)) context else
+   print(xtable(context,auto=TRUE),comment=FALSE,
+         sanitize.text.function = identity,type=outputFormat)
+
+```
+
+
+
+ 
