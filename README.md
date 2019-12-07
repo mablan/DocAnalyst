@@ -8,7 +8,7 @@ and a list of three keywords perform the following:
 * Count the their frequency
 * Highlighting the paragraphs where the keyword was found
 
-The process will be explained in detail with the first keyword. For each keyword
+The process is explained in detail with the first keyword. For each keyword
 a table is produced with the page number (original document), line number (text 
 data frame), and fragment text where it is produced. At the end a table with
 all the keywords is presented. 
